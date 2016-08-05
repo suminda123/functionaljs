@@ -1,0 +1,83 @@
+'use strict';
+
+const fs = require("fs");
+const highland = require("highland");
+const Moment = require('moment');
+const elasticSearch = require('./elasticsearch');
+
+let counter = 0;
+
+elasticSearch.indexExists()
+    .then(function (data) {
+        if (!data) {
+            elasticSearch
+                .createIndex()
+                .then(function (data) {
+                    // noinspection JSUnresolvedVariable
+                    if (data.acknowledged) {
+                        console.log(data, "index is created");
+                        elasticSearch
+                            .initMapping()
+                            .then(function (d1) {
+                                console.log(d1, "indexmapping done");
+                                indexData();
+                            });
+                    }
+                });
+        }
+        else {
+            console.log(data, "indexExists");
+            indexData();
+        }
+    })
+    .error(function (err) {
+        console.log(err, "indexExists error");
+    });
+
+//decorator function
+function* indexDoc(doc){
+
+    elasticSearch
+        .addDocument(doc)
+        .then(function (result) {
+            console.log(counter++);
+        })
+        .error(function() {
+            console.log('index erroor', err);
+        }).done(yield counter);
+}
+
+function getDoc(parts) {
+    let date = Moment(parts[1].trim());
+    date = date.isValid() ? date : Moment();
+    return {
+        machine: "gw2",
+        messageType: parts[0].trim(),
+        dateLog: date,
+        content: parts[2]
+    };
+};
+
+function indexData() {
+    let logspath = __dirname + '\\logdata';
+    let files = fs.readdirSync(logspath, "utf8");
+
+    files.forEach(file => {
+        counter = 0;
+        let filepath = logspath + '\\' + file;
+        console.log(filepath);
+        highland(fs.createReadStream(filepath, 'utf8'))
+            .split()
+            .map(line => line.split('|'))
+            .filter(x => x.length > 1)
+            .map(parts => getDoc(parts))
+            .each((x) => {
+                indexDoc(x).next();//decorator function call
+            })
+            .done(d => {
+                fs.unlinkSync(filepath);
+                console.log('done');
+            });
+    });
+}
+// .filter(d => d.messageType === "#ERR  ")
